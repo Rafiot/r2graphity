@@ -19,28 +19,40 @@ misp_objects_path = './misp-objects/objects'
 
 class MISPObjectGenerator(metaclass=abc.ABCMeta):
 
-    def __init__(self):
+    def __init__(self, object_definition):
+        with open(os.path.join(misp_objects_path, object_definition), 'r') as f:
+            self.definition = json.load(f)
         self.misp_event = MISPEvent()
         self.uuid = str(uuid.uuid4())
         self.links = []
 
-    def _fill_object(self, obj_def, values):
-        empty_object = self.__new_empty_object(obj_def)
+    def _fill_object(self, values):
+        # Create an empty object based om the object definition
+        empty_object = self.__new_empty_object(self.definition)
         if self.links:
+            # Set the links to other objects
             empty_object["ObjectReference"] = []
             for link in self.links:
                 uuid, comment = link
                 empty_object['ObjectReference'].append({'referenced_object_uuid': uuid, 'comment': comment})
         for object_type, value in values.items():
+            # Add all the values as MISPAttributes to the current object
             if value.get('value') is None:
                 continue
+            # Initialize the new MISPAttribute
             attribute = MISPAttribute(self.misp_event.describe_types)
-            value['type'] = obj_def['attributes'][object_type]['misp-attribute']
+            # Get the misp attribute type from the definition
+            value['type'] = self.definition['attributes'][object_type]['misp-attribute']
             if value.get('disable_correlation') is None:
-                value['disable_correlation'] = obj_def['attributes'][object_type].get('disable_correlation')
+                # The correlation can be disabled by default in the object definition.
+                # Use this value if it isn't overloaded by the object
+                value['disable_correlation'] = self.definition['attributes'][object_type].get('disable_correlation')
             if value.get('to_ids') is None:
-                value['to_ids'] = obj_def['attributes'][object_type].get('to_ids')
+                # Same for the to_ids flag
+                value['to_ids'] = self.definition['attributes'][object_type].get('to_ids')
+            # Set all the values in the MISP attribute
             attribute.set_all_values(**value)
+            # Finalize the actual MISP Object
             empty_object['ObjectAttribute'].append({'type': object_type, 'Attribute': attribute._json()})
         return empty_object
 
@@ -54,19 +66,21 @@ class MISPObjectGenerator(metaclass=abc.ABCMeta):
 
     @abc.abstractmethod
     def generate_attributes(self):
+        # Contains the logic where all the values of the object are gathered
         pass
 
     @abc.abstractmethod
     def dump(self):
+        # This method normalize the attributes to add to the object
+        # It returns an python dictionary where the key is the type defined in the
+        # object, and the value the value of the MISP Attribute
         pass
 
 
 class FileObject(MISPObjectGenerator):
 
     def __init__(self, filepath):
-        MISPObjectGenerator.__init__(self)
-        with open(os.path.join(misp_objects_path, 'file/definition.json'), 'r') as f:
-            self.mo_file = json.load(f)
+        MISPObjectGenerator.__init__(self, 'file/definition.json')
         self.filepath = filepath
         with open(self.filepath, 'rb') as f:
             self.pseudo_file = BytesIO(f.read())
@@ -120,15 +134,13 @@ class FileObject(MISPObjectGenerator):
             # file_object['sha512/224'] = self.
             # file_object['sha512/256'] = self.
             # file_object['tlsh'] = self.
-        return self._fill_object(self.mo_file, file_object)
+        return self._fill_object(file_object)
 
 
 class PEObject(MISPObjectGenerator):
 
     def __init__(self, data):
-        MISPObjectGenerator.__init__(self)
-        with open(os.path.join(misp_objects_path, 'pe/definition.json'), 'r') as f:
-            self.mo_pe = json.load(f)
+        MISPObjectGenerator.__init__(self, 'pe/definition.json')
         self.data = data
         self.pe = pefile.PE(data=self.data)
         self.generate_attributes()
@@ -206,15 +218,13 @@ class PEObject(MISPObjectGenerator):
             pe_object['company-name'] = {'value': self.company_name}
         if hasattr(self, 'nb_sections'):
             pe_object['number-sections'] = {'value': self.nb_sections}
-        return self._fill_object(self.mo_pe, pe_object)
+        return self._fill_object(pe_object)
 
 
 class PESectionObject(MISPObjectGenerator):
 
     def __init__(self, section_info, data):
-        MISPObjectGenerator.__init__(self)
-        with open(os.path.join(misp_objects_path, 'pe-section/definition.json'), 'r') as f:
-            self.mo_pe_section = json.load(f)
+        MISPObjectGenerator.__init__(self, 'pe-section/definition.json')
         self.section_info = section_info
         self.data = data
         self.generate_attributes()
@@ -241,7 +251,7 @@ class PESectionObject(MISPObjectGenerator):
             section['sha256'] = {'value': self.sha256}
             section['sha512'] = {'value': self.sha512}
             section['ssdeep'] = {'value': self.ssdeep}
-        return self._fill_object(self.mo_pe_section, section)
+        return self._fill_object(section)
 
 
 def make_objects(filepath):
@@ -263,7 +273,7 @@ def make_objects(filepath):
 
 if __name__ == '__main__':
     import glob
-    for f in glob.glob('/path/to/samples/*'):
+    for f in glob.glob('/home/raphael/.viper/projects/troopers17/vt_samples/*/*'):
         fo, peo, seos = make_objects(f)
         #print(json.dumps([fo, peo, seos]))
         #break
