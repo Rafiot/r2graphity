@@ -3,7 +3,6 @@
 import sys
 import os
 import py2neo
-from pydotplus.graphviz import Node
 import networkx as nx
 import numpy as np
 import pickle
@@ -33,7 +32,7 @@ def toNeo(graphity, allAtts):
 	neoSelector = py2neo.NodeSelector(neoGraph)
 
 	# flush of the DB, for test purposes
-	# neoGraph.delete_all()
+	neoGraph.delete_all()
 
 	mySha1 = allAtts['sha1']
 
@@ -46,6 +45,12 @@ def toNeo(graphity, allAtts):
 		sampleNode = py2neo.Node("SAMPLE", sha1=mySha1, fileSize=allAtts['filesize'], binType=allAtts['filetype'], imphash=allAtts['imphash'], compilation=allAtts['compilationts'], addressEp=allAtts['addressep'], sectionEp=allAtts['sectionep'], sectionCount=allAtts['sectioncount'], originalFilename=allAtts['originalfilename'])
 		neoGraph.create(sampleNode)
 
+		# get nodes with 0 indegree, prepare relations from master node 
+		indegrees = graphity.in_degree()
+		rootlist = []
+		for val in indegrees:
+			if indegrees[val] == 0:
+				rootlist.append(val)
 
 		# parsing of the NetworkX graph - functions, APIs and strings are all Neo4j nodes
 		for nxNode in graphity.nodes(data=True):
@@ -54,13 +59,18 @@ def toNeo(graphity, allAtts):
 			funcCalltype = nxNode[1]['calltype']
 			funcSize = nxNode[1]['size']
 			funcAlias = ''
-			funcType = nxNode[1]['functiontype']
+			funcType = ''
+			if nxNode[1].get('functiontype') : funcType = nxNode[1]['functiontype']
 			if nxNode[1].get('alias') : funcAlias = nxNode[1]['alias']
 
 			# sha1 serves as link to master node, but also as node identifier in combination with the function address
 			# TODO for saving memory, explore possibility of replacing sha1 with an index, as sha info is held in master node anyway
 			functionNode = py2neo.Node("FUNCTION", sample=mySha1, address=funcAddress, callType=funcCalltype, funcSize=funcSize, funcType=funcType, alias=funcAlias)
 			neoGraph.create(functionNode)
+			
+			if funcAddress in rootlist:
+				rootrel = py2neo.Relationship(sampleNode, "virtual_relationship", functionNode)
+				neoGraph.create(rootrel)
 
 			stringList = nxNode[1]['strings']
 
@@ -104,13 +114,20 @@ def toNeo(graphity, allAtts):
 			neoGraph.create(funcCallsFunc)
 
 
-
-
-# fetching NetworkX graph from Neo, still to do; not sure if useful
+# EXPERIMENTAL fetching queries from Neo
 def fromNeo():
-	pass
+	
+	py2neo.authenticate("localhost:7474", "neo4j", "neo4j")
+	neoGraph = py2neo.Graph("http://localhost:7474/")
+	neoSelector = py2neo.NodeSelector(neoGraph)
+	
+	query = neoGraph.run("MATCH (f:FUNCTION)-->(s:STRING) WHERE s.string CONTAINS 'OpenSSL' RETURN DISTINCT f.sample")
+	print (query.dump())
+	
+	query = neoGraph.run("MATCH (s:SAMPLE {sha1: '04301b59c6eb71db2f701086b617a98c6e026872'})-[rels*]->(c) RETURN *")
+	print (query.dump())
 
-
+	
 # dump entire NetworkX graph + debug info to text files, graph caching to save parsing time for already parsed binaries
 def toPickle(graphity, debug, sha1):
 
@@ -295,7 +312,7 @@ def dumpGraphInfoCsv(graphity, debug, allAtts, csvfile):
 	else:
 		try:
 			dumpfile = open(csvfile, 'w')
-			dumpfile.write("filename,filetype,filesize,codesecsize,md5,imphash,compilationtime,addressep,sectionep,tlssections,originalfilename,sectioncount,secname1,secname2,secname3,secname4,secname5,secname6,secsize1,secsize2,secsize3,secsize4,secsize5,secsize6,secent1,secent2,secent3,secent4,secent5,secent6,functionstotal,refslocal,refsglobalvar,refsunknown,apitotal,apimisses,stringsreferenced,stringsdangling,stringsnoref,ratiofunc,ratioapi,ratiostring,getproc,createthread,memalloc")
+			dumpfile.write("filename,filetype,filesize,codesecsize,md5,imphash,compilationtime,addressep,sectionep,tlssections,originalfilename,sectioncount,secname1,secname2,secname3,secname4,secname5,secname6,secsize1,secsize2,secsize3,secsize4,secsize5,secsize6,secent1,secent2,secent3,secent4,secent5,secent6,functionstotal,refslocal,refsglobalvar,refsunknown,apitotal,apimisses,stringsreferenced,stringsdangling,stringsnoref,ratiofunc,ratioapi,ratiostring,getprocaddress,memallocation,createthread,ctshortestpath,callbackcount,cbaveragesize,cblargestsize")
 			dumpfile.write("\n")
 		except:
 			print("ERROR couldn't create the csv dump file")
@@ -345,6 +362,7 @@ def dumpGraphInfoCsv(graphity, debug, allAtts, csvfile):
 	createThCount = 0
 	memAllocs = 0
 
+	# TODO replace this with exGraph 
 	for function in allCalls:
 		for call in allCalls[function]:
 			if 'GetProcAddress' in call[1]:
@@ -355,12 +373,74 @@ def dumpGraphInfoCsv(graphity, debug, allAtts, csvfile):
 				memAllocs = memAllocs + 1
 
 	final.append(str(gpaCount))
-	final.append(str(createThCount))
 	final.append(str(memAllocs))
+	final.append(str(createThCount))
 
+	# Extended version of graphity, where strings/apis are nodes by themselves + graph has a supernode
+	exGraph = extendedGraph(graphity, allAtts)
+
+	shortestPathLen = 0
+	if createThCount > 0:
+		#shortestPath = nx.shortest_path(exGraph, allAtts['sha1'], 'CreateThread')[1:]
+		#allShortestPaths = nx.all_shortest_paths(exGraph, allAtts['sha1'], 'CreateThread')
+		shortestPathLen = nx.shortest_path_length(exGraph, allAtts['sha1'], 'CreateThread')
+	# add shortest path length as metric
+	final.append(str(shortestPathLen))
+		
+	# Callback sizes
+	callbackCount = 0
+	callbackSizes = []
+	callbacks = (n for n in exGraph if 'functiontype' in exGraph.node[n] and exGraph.node[n]['functiontype'] == 'Callback')
+	for cback in callbacks:
+		callbackCount += 1
+		callbackSizes.append(exGraph.node[cback]['size'])
+		
+	final.append(str(callbackCount))
+	avSize = 0
+	maxSize = 0
+	if callbackCount > 0:
+		avSize = int(np.mean(callbackSizes))
+		maxSize = max(callbackSizes)
+	final.append(avSize)
+	final.append(maxSize)
+	
 	theline = ",".join(map(str, final)) + "\n"
 
 	dumpfile.write(theline)
 	dumpfile.close()
+	
 
-
+# TODO see whether this can be put in a location for "graph transformation"
+# Create a copy of the graphity structure, with APIs and strings as separate nodes
+def extendedGraph(graphity, allAtts):
+	
+	# copy NetworkX graph structure
+	analysisGraph = graphity.copy()
+	
+	# per node, add string/api nodes and respective edges, networkx cares about possible duplicates automatically
+	for aNode in analysisGraph.nodes(data=True):
+	
+		stringList = aNode[1]['strings']
+		for stringData in stringList:
+			analysisGraph.add_node(stringData[1], type='String')
+			analysisGraph.add_edge(aNode[0], stringData[1])
+				
+		apiList = aNode[1]['calls']
+		for apiData in apiList:
+			analysisGraph.add_node(apiData[1], type='Api')
+			analysisGraph.add_edge(aNode[0], apiData[1])
+		
+		# delete lists from nodes
+		del analysisGraph.node[aNode[0]]['calls']
+		del analysisGraph.node[aNode[0]]['strings']
+	
+	# add super node as SHA1
+	analysisGraph.add_node(allAtts['sha1'], fileSize=allAtts['filesize'], binType=allAtts['filetype'], imphash=allAtts['imphash'], compilation=allAtts['compilationts'], addressEp=allAtts['addressep'], sectionEp=allAtts['sectionep'], sectionCount=allAtts['sectioncount'], originalFilename=allAtts['originalfilename'])
+		
+	# add edges to super node
+	indegrees = graphity.in_degree()
+	for val in indegrees:
+		if indegrees[val] == 0:
+			analysisGraph.add_edge(allAtts['sha1'], val)
+		
+	return analysisGraph	

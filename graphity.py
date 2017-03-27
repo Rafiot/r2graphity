@@ -10,8 +10,8 @@ from time import time
 from datetime import datetime
 from argparse import ArgumentParser
 from base64 import b64decode
-from graphityOut import toNeo, printGraph, printGraphInfo, dumpGraphInfoCsv, toPickle, fromPickle
-from graphityViz import graphvizPlot, dumpJsonForJit, dumpGml
+from graphityOut import toNeo, fromNeo, printGraph, printGraphInfo, dumpGraphInfoCsv, toPickle, fromPickle
+from graphityViz import graphvizPlot, dumpJsonForJit, dumpGml, dumpGmlSubgraph
 from graphityUtils import gimmeDatApiName, sha1hash, getAllAttributes, is_ascii, Hvalue, check_pe_header
 from graphityScan import functionalityScan
 import graphityFunc
@@ -169,6 +169,7 @@ def stringScan(debugDict):
 	# izzj parses entire binary
 	stringCmd = "izzj"
 	strings = R2PY.cmd(stringCmd)
+	#print (strings)
 	parsedStrings = json.loads(strings)
 
 	debugDict['stringsDangling'] = []
@@ -283,7 +284,7 @@ def createRawGraph():
 
 	### NetworkX Graph Structure ###
 
-	# FUNCTION as node, attributes: function address, size, calltype, list of calls, list of strings, count of calls; functiontype[Standard, Callback, Export], alias (e.g. export name)
+	# FUNCTION as node, attributes: function address, size, calltype, list of calls, list of strings, count of calls; functiontype[Callback, Export], alias (e.g. export name)
 	# FUNCTIoN REFERENCE as edge (function address -> target address), attributes: ref offset (at)
 	# CALLBACK REFERENCE as edge (currently for threads and Windows hooks)
 	# API CALLS (list attribute of function node): address, API name
@@ -294,7 +295,7 @@ def createRawGraph():
 	for item in functionList:
 
 		#print hex(item['offset'])
-		graphity.add_node(hex(item['offset']), size=item['size'], calltype=item['calltype'], calls=[], apicallcount=0, strings=[], functiontype='Standard')
+		graphity.add_node(hex(item['offset']), size=item['size'], calltype=item['calltype'], calls=[], apicallcount=0, strings=[], functiontype='')
 
 	for item in functionList:
 
@@ -461,12 +462,12 @@ def tagCallbacks(graphity):
 			# also, maybe this is fixed in radare later, so consider this code redundant by then
 			if 'CreateThread' in call[1]:
 				addr = getCallback(call[0], 3)
-
+				
 			if 'SetWindowsHookEx' in call[1]:
 				addr = getCallback(call[0], 2)
 
 			function = gimmeRespectiveFunction(addr)
-
+			
 			if function in graphity:
 				graphity.node[function]['functiontype'] = "Callback"
 				graphity.add_edge(aNode[0], function, pos=call[0], calltype="callback")
@@ -602,9 +603,7 @@ if __name__ == '__main__':
 
 		allAtts = getAllAttributes(args.input)
 		graphity, debug = graphMagix(args.input, allAtts, args.deactivatecache)
-
-
-			
+		
 		# TODO decide what to do with dangling strings/APIs (string filtering with frequency analysis?)
 
 

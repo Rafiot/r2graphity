@@ -20,6 +20,7 @@ def dumpGml(graphity):
 				
 	nx.write_gml(graphMl, "output/callgraph.gml")
 	
+	
 	behaviorGraph = graphity.copy()
 		
 	allThePatterns = graphityFunc.funcDict
@@ -43,6 +44,52 @@ def dumpGml(graphity):
 			behaviorGraph.node[node]['behaviors'] += '|'
 				
 	nx.write_gml(behaviorGraph, "output/behaviorgaddgets.gml")
+	
+	
+	allocGraph = graphity.copy()
+	for node in allocGraph.nodes():
+		allocGraph.node[node]['allocs'] = 0
+		
+	allCalls = nx.get_node_attributes(allocGraph, 'calls')
+	for function in allCalls:
+		for call in allCalls[function]:
+			if 'alloc' in call[1].lower():
+				allocGraph.node[function]['allocs'] += 1
+	
+	for node in allocGraph:
+		del allocGraph.node[node]['calls']
+		del allocGraph.node[node]['strings']
+	nx.write_gml(allocGraph, "output/allocgadgets.gml")
+
+def dumpGmlSubgraph(graphity, address):
+
+	theSub = nx.DiGraph()
+	theSub.add_node(address, type='function', size=graphity.node[address]['size'], apicallcount=graphity.node[address]['apicallcount'])
+	fetchExtendedSubgraph(graphity, theSub, address)
+	gmlfile = "output/subgraph_" + address + ".gml"
+	nx.write_gml(theSub, gmlfile)
+
+	
+def fetchExtendedSubgraph(graphity, theSub, address):
+	
+	for acall in graphity.node[address]['calls']:
+		label = acall[0] + '|' + acall[1]
+		theSub.add_node(label, type='api', apiname=acall[1])
+		theSub.add_edge(address, label)
+	
+	for astring in graphity.node[address]['strings']:
+		label = astring[0] + '|' + astring[1]
+		theSub.add_node(label, type='string', string=astring[1])
+		theSub.add_edge(address, label)
+	
+	neighbors = graphity.successors(address)
+	
+	for neigh in neighbors:
+		theSub.add_node(neigh, type='function', size=graphity.node[neigh]['size'], apicallcount=graphity.node[neigh]['apicallcount']) # add attributes
+		theSub.add_edge(address, neigh)
+		fetchExtendedSubgraph(graphity, theSub, neigh)
+		
+	return
 		
 
 # Graph plotting with pydotplus from within NetworkX, format is dot
@@ -71,14 +118,14 @@ def graphvizPlot(graphity, allAtts):
 			finalList.sort()
 			finalString = '\n'.join(finalList)
 			
-		if node.get('type') == 'Export':
+		if node.get('functiontype') == 'Export':
 			label = "Export " + nodeaddr + node.get('alias')
 			label = label + "\n" + finalString
 			node.set_fillcolor('skyblue')
 			node.set_style('filled,setlinewidth(3.0)')
 			node.set_label(label)
 
-		elif node.get('type') == 'Callback':
+		elif node.get('functiontype') == 'Callback':
 			label = "Callback " + nodeaddr + "\n" + finalString
 			node.set_fillcolor('darkolivegreen1')
 			node.set_style('filled,setlinewidth(3.0)')

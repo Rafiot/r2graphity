@@ -15,6 +15,12 @@ def functionalityScan(graphity, pattern):
 	allCalls = nx.get_node_attributes(graphity, 'calls')
 
 	for function in allCalls:
+	
+		# TODO make this prettier!
+		# apis = [el[1] for el in allCalls[function]]
+		# if 'CreateThread' in apis:
+		# 	print (function)
+			
 		for call in allCalls[function]:
 
 			api = call[1]
