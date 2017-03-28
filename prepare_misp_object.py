@@ -17,6 +17,15 @@ import abc
 misp_objects_path = './misp-objects/objects'
 
 
+class MISPObjectException(Exception):
+    pass
+
+
+class InvalidMISPObject(MISPObjectException):
+    """Exception raised when an object doesn't contains the required field(s)"""
+    pass
+
+
 class MISPObjectGenerator(metaclass=abc.ABCMeta):
 
     def __init__(self, object_definition):
@@ -26,7 +35,9 @@ class MISPObjectGenerator(metaclass=abc.ABCMeta):
         self.uuid = str(uuid.uuid4())
         self.links = []
 
-    def _fill_object(self, values):
+    def _fill_object(self, values, strict=True):
+        if strict:
+            self._validate(values)
         # Create an empty object based om the object definition
         empty_object = self.__new_empty_object(self.definition)
         if self.links:
@@ -55,6 +66,18 @@ class MISPObjectGenerator(metaclass=abc.ABCMeta):
             # Finalize the actual MISP Object
             empty_object['ObjectAttribute'].append({'type': object_type, 'Attribute': attribute._json()})
         return empty_object
+
+    def _validate(self, dump):
+        all_attribute_names = set(dump.keys())
+        print(all_attribute_names)
+        if self.definition.get('requiredOneOf'):
+            if not set(self.definition['requiredOneOf']) & all_attribute_names:
+                raise InvalidMISPObject('At least one of the following attributes is required: {}'.format(', '.join(self.definition['requiredOneOf'])))
+        if self.definition.get('required'):
+            for r in self.definition.get('required'):
+                if r not in all_attribute_names:
+                    raise InvalidMISPObject('{} is required is required'.format(r))
+        return True
 
     def add_link(self, uuid, comment=None):
         self.links.append((uuid, comment))
